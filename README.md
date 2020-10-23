@@ -6,7 +6,7 @@ This library should be useless after react-native-webrtc adds support for addTra
 
 #### Note for react-native-webrtc users.
 
-If you already had simple-peer installed and are going to use this one, then after installing remember to clean packager cache by restarting your metro bundler with ```react-native start --reset-cache```
+If you already had simple-peer installed and are going to use this one, then after installing remember to clean packager cache by restarting your metro bundler with ```react-native start --reset-cache```, else you might just like me be getting a can't find 'addTrack' error.
 
 #### Deviations from simple-peer
 
@@ -15,7 +15,7 @@ addTrack, removeTrack, replaceTrack, and addTransceiver have been removed. addSt
 ## install
 
 ```
-npm install simple-peer
+npm install git+https://github.com/ExpandoPakistan/simple-peer-legacy.git
 ```
 
 ## usage
