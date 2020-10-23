@@ -83,12 +83,10 @@ class Peer extends stream.Duplex {
     this._isNegotiating = this.negotiated ? false : !this.initiator // is this peer waiting for negotiation to complete?
     this._batchedNegotiation = false // batch synchronous negotiations
     this._queuedNegotiation = false // is there a queued negotiation request?
-    this._sendersAwaitingStable = []
     this._senderMap = new Map()
     this._firstStable = true
     this._closingInterval = null
 
-    this._remoteTracks = []
     this._remoteStreams = []
 
     this._chunk = null
@@ -143,8 +141,9 @@ class Peer extends stream.Duplex {
         this.addStream(stream)
       })
     }
-    this._pc.ontrack = event => {
-      this._onTrack(event)
+    // TODO: Change this to onstream.
+    this._pc.onaddstream = event => {
+      this._onAddStream(event)
     }
 
     if (this.initiator) {
@@ -186,10 +185,6 @@ class Peer extends stream.Duplex {
       this._debug('got request to renegotiate')
       this._needsNegotiation()
     }
-    if (data.transceiverRequest && this.initiator) {
-      this._debug('got request for transceiver')
-      this.addTransceiver(data.transceiverRequest.kind, data.transceiverRequest.init)
-    }
     if (data.candidate) {
       if (this._pc.remoteDescription && this._pc.remoteDescription.type) {
         this._addIceCandidate(data.candidate)
@@ -213,7 +208,7 @@ class Peer extends stream.Duplex {
           this.destroy(errCode(err, 'ERR_SET_REMOTE_DESCRIPTION'))
         })
     }
-    if (!data.sdp && !data.candidate && !data.renegotiate && !data.transceiverRequest) {
+    if (!data.sdp && !data.candidate && !data.renegotiate) {
       this.destroy(errCode(new Error('signal() called with invalid signal data'), 'ERR_SIGNALING'))
     }
   }
@@ -239,108 +234,17 @@ class Peer extends stream.Duplex {
   }
 
   /**
-   * Add a Transceiver to the connection.
-   * @param {String} kind
-   * @param {Object} init
-   */
-  addTransceiver (kind, init) {
-    this._debug('addTransceiver()')
-
-    if (this.initiator) {
-      try {
-        this._pc.addTransceiver(kind, init)
-        this._needsNegotiation()
-      } catch (err) {
-        this.destroy(errCode(err, 'ERR_ADD_TRANSCEIVER'))
-      }
-    } else {
-      this.emit('signal', { // request initiator to renegotiate
-        transceiverRequest: { kind, init }
-      })
-    }
-  }
-
-  /**
    * Add a MediaStream to the connection.
    * @param {MediaStream} stream
    */
   addStream (stream) {
     this._debug('addStream()')
 
-    stream.getTracks().forEach(track => {
-      this.addTrack(track, stream)
-    })
-  }
+    this._pc.addStream(stream);
 
-  /**
-   * Add a MediaStreamTrack to the connection.
-   * @param {MediaStreamTrack} track
-   * @param {MediaStream} stream
-   */
-  addTrack (track, stream) {
-    this._debug('addTrack()')
-
-    var submap = this._senderMap.get(track) || new Map() // nested Maps map [track, stream] to sender
-    var sender = submap.get(stream)
-    if (!sender) {
-      sender = this._pc.addTrack(track, stream)
-      submap.set(stream, sender)
-      this._senderMap.set(track, submap)
-      this._needsNegotiation()
-    } else if (sender.removed) {
-      throw errCode(new Error('Track has been removed. You should enable/disable tracks that you want to re-add.'), 'ERR_SENDER_REMOVED')
-    } else {
-      throw errCode(new Error('Track has already been added to that stream.'), 'ERR_SENDER_ALREADY_ADDED')
-    }
-  }
-
-  /**
-   * Replace a MediaStreamTrack by another in the connection.
-   * @param {MediaStreamTrack} oldTrack
-   * @param {MediaStreamTrack} newTrack
-   * @param {MediaStream} stream
-   */
-  replaceTrack (oldTrack, newTrack, stream) {
-    this._debug('replaceTrack()')
-
-    var submap = this._senderMap.get(oldTrack)
-    var sender = submap ? submap.get(stream) : null
-    if (!sender) {
-      throw errCode(new Error('Cannot replace track that was never added.'), 'ERR_TRACK_NOT_ADDED')
-    }
-    if (newTrack) this._senderMap.set(newTrack, submap)
-
-    if (sender.replaceTrack != null) {
-      sender.replaceTrack(newTrack)
-    } else {
-      this.destroy(errCode(new Error('replaceTrack is not supported in this browser'), 'ERR_UNSUPPORTED_REPLACETRACK'))
-    }
-  }
-
-  /**
-   * Remove a MediaStreamTrack from the connection.
-   * @param {MediaStreamTrack} track
-   * @param {MediaStream} stream
-   */
-  removeTrack (track, stream) {
-    this._debug('removeSender()')
-
-    var submap = this._senderMap.get(track)
-    var sender = submap ? submap.get(stream) : null
-    if (!sender) {
-      throw errCode(new Error('Cannot remove track that was never added.'), 'ERR_TRACK_NOT_ADDED')
-    }
-    try {
-      sender.removed = true
-      this._pc.removeTrack(sender)
-    } catch (err) {
-      if (err.name === 'NS_ERROR_UNEXPECTED') {
-        this._sendersAwaitingStable.push(sender) // HACK: Firefox must wait until (signalingState === stable) https://bugzilla.mozilla.org/show_bug.cgi?id=1133874
-      } else {
-        this.destroy(errCode(err, 'ERR_REMOVE_TRACK'))
-      }
-    }
-    this._needsNegotiation()
+    queueMicrotask(() => {
+      this._needsNegotiation();
+    });
   }
 
   /**
@@ -350,9 +254,11 @@ class Peer extends stream.Duplex {
   removeStream (stream) {
     this._debug('removeSenders()')
 
-    stream.getTracks().forEach(track => {
-      this.removeTrack(track, stream)
-    })
+    this._pc.removeStream(stream);
+
+    queueMicrotask(() => {
+      this._needsNegotiation();
+    });
   }
 
   _needsNegotiation () {
@@ -412,7 +318,6 @@ class Peer extends stream.Duplex {
     this._connected = false
     this._pcReady = false
     this._channelReady = false
-    this._remoteTracks = null
     this._remoteStreams = null
     this._senderMap = null
 
@@ -446,7 +351,7 @@ class Peer extends stream.Duplex {
       this._pc.onicegatheringstatechange = null
       this._pc.onsignalingstatechange = null
       this._pc.onicecandidate = null
-      this._pc.ontrack = null
+      this._pc.onaddstream = null
       this._pc.ondatachannel = null
     }
     this._pc = null
@@ -598,16 +503,6 @@ class Peer extends stream.Duplex {
       })
   }
 
-  _requestMissingTransceivers () {
-    if (this._pc.getTransceivers) {
-      this._pc.getTransceivers().forEach(transceiver => {
-        if (!transceiver.mid && transceiver.sender.track && !transceiver.requested) {
-          transceiver.requested = true // HACK: Safari returns negotiated transceivers with a null mid
-          this.addTransceiver(transceiver.sender.track.kind)
-        }
-      })
-    }
-  }
 
   _createAnswer () {
     if (this.destroyed) return
@@ -626,7 +521,6 @@ class Peer extends stream.Duplex {
             type: signal.type,
             sdp: signal.sdp
           })
-          if (!this.initiator) this._requestMissingTransceivers()
         }
 
         const onSuccess = () => {
@@ -878,14 +772,6 @@ class Peer extends stream.Duplex {
     if (this._pc.signalingState === 'stable' && !this._firstStable) {
       this._isNegotiating = false
 
-      // HACK: Firefox doesn't yet support removing tracks when signalingState !== 'stable'
-      this._debug('flushing sender queue', this._sendersAwaitingStable)
-      this._sendersAwaitingStable.forEach(sender => {
-        this._pc.removeTrack(sender)
-        this._queuedNegotiation = true
-      })
-      this._sendersAwaitingStable = []
-
       if (this._queuedNegotiation) {
         this._debug('flushing negotiation queue')
         this._queuedNegotiation = false
@@ -949,26 +835,12 @@ class Peer extends stream.Duplex {
     this.destroy()
   }
 
-  _onTrack (event) {
-    if (this.destroyed) return
+  _onAddStream (event) {
+    if (this.destroyed) return;
 
-    event.streams.forEach(eventStream => {
-      this._debug('on track')
-      this.emit('track', event.track, eventStream)
-
-      this._remoteTracks.push({
-        track: event.track,
-        stream: eventStream
-      })
-
-      if (this._remoteStreams.some(remoteStream => {
-        return remoteStream.id === eventStream.id
-      })) return // Only fire one 'stream' event, even though there may be multiple tracks per stream
-
-      this._remoteStreams.push(eventStream)
-      queueMicrotask(() => {
-        this.emit('stream', eventStream) // ensure all tracks have been added
-      })
+    this._remoteStreams.push(event.stream);
+    queueMicrotask(() => {
+      this.emit('stream', event.stream)
     })
   }
 
