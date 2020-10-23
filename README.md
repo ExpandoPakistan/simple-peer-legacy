@@ -1,50 +1,12 @@
-# simple-peer [![travis][travis-image]][travis-url] [![coveralls][coveralls-image]][coveralls-url] [![npm][npm-image]][npm-url] [![downloads][downloads-image]][downloads-url] [![javascript style guide][standard-image]][standard-url] [![javascript style guide][sauce-image]][sauce-url]
+# simple-peer-legacy
 
-[travis-image]: https://img.shields.io/travis/feross/simple-peer/master.svg
-[travis-url]: https://travis-ci.org/feross/simple-peer
-[coveralls-image]: https://coveralls.io/repos/github/feross/simple-peer/badge.svg?branch=master
-[coveralls-url]: https://coveralls.io/github/feross/simple-peer?branch=master
-[npm-image]: https://img.shields.io/npm/v/simple-peer.svg
-[npm-url]: https://npmjs.org/package/simple-peer
-[downloads-image]: https://img.shields.io/npm/dm/simple-peer.svg
-[downloads-url]: https://npmjs.org/package/simple-peer
-[standard-image]: https://img.shields.io/badge/code_style-standard-brightgreen.svg
-[standard-url]: https://standardjs.com
-[sauce-image]: https://saucelabs.com/buildstatus/simple-peer
-[sauce-url]: https://saucelabs.com/u/simple-peer
+This repository is an indirect fork of the original feross/simple-peer. The only purpose of creating this library is to make simple-peer compatible with react-native-webrtc. The default simple-peer also works with react-native-webrtc but only for datachannels, as soon as you add a stream it crashes because simple-peer uses addTrack which is the newer API, meanwhile react-native-webrtc still only supports addStream and onaddstream.
 
-#### Simple WebRTC video, voice, and data channels
+This library should be useless after react-native-webrtc adds support for addTrack and the like.
 
-## features
+#### Deviations from simple-peer
 
-- concise, **node.js style** API for [WebRTC](https://en.wikipedia.org/wiki/WebRTC)
-- **works in node and the browser!**
-- supports **video/voice streams**
-- supports **data channel**
-  - text and binary data
-  - node.js [duplex stream](http://nodejs.org/api/stream.html) interface
-- supports advanced options like:
-  - enable/disable [trickle ICE candidates](http://webrtchacks.com/trickle-ice/)
-  - manually set config options
-  - transceivers and renegotiation
-
-This package is used by [WebTorrent](https://webtorrent.io) and [many others](#who-is-using-simple-peer).
-
-- [install](#install)
-- [examples](#usage)
-  * [A simpler example](#a-simpler-example)
-  * [data channels](#data-channels)
-  * [video/voice](#videovoice)
-  * [dynamic video/voice](#dynamic-videovoice)
-  * [in node](#in-node)
-- [api](#api)
-- [events](#events)
-- [error codes](#error-codes)
-- [connecting more than 2 peers?](#connecting-more-than-2-peers)
-- [memory usage](#memory-usage)
-- [connection does not work on some networks?](#connection-does-not-work-on-some-networks)
-- [Who is using `simple-peer`?](#who-is-using-simple-peer)
-- [license](#license)
+addTrack, removeTrack, replaceTrack, and addTransceiver have been removed. addStream and removeStream can still be used.
 
 ## install
 
@@ -52,71 +14,107 @@ This package is used by [WebTorrent](https://webtorrent.io) and [many others](#w
 npm install simple-peer
 ```
 
-This package works in the browser with [browserify](https://browserify.org). If
-you do not use a bundler, you can use the `simplepeer.min.js` standalone script
-directly in a `<script>` tag. This exports a `SimplePeer` constructor on
-`window`. Wherever you see `Peer` in the examples below, substitute that with
-`SimplePeer`.
-
 ## usage
 
-Let's create an html page that lets you manually connect two peers:
+You can have a look at index.html inside simple-peer-legacy-test - just serve that folder on localhost:
 
 ```html
 <html>
-  <body>
+
+<body>
     <style>
-      #outgoing {
-        width: 600px;
-        word-wrap: break-word;
-        white-space: normal;
-      }
+        #outgoing {
+            width: 600px;
+            word-wrap: break-word;
+            white-space: normal;
+        }
     </style>
-    <form>
-      <textarea id="incoming"></textarea>
-      <button type="submit">submit</button>
-    </form>
-    <pre id="outgoing"></pre>
+    <div>
+        <p>incoming video for peer i</p>
+        <video id="vid1" autoplay muted></video>
+    </div>
+    <div>
+        <p>incoming video for peer ni</p>
+        <video id="vid2" autoplay muted></video>
+    </div>
     <script src="simplepeer.min.js"></script>
     <script>
-      const p = new SimplePeer({
-        initiator: location.hash === '#1',
-        trickle: false
-      })
+        (async () => {
+            const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+            const iVid = document.getElementById("vid1"); // incoming video for peer i
+            const niVid = document.getElementById("vid2"); // incoming video for peer ni
 
-      p.on('error', err => console.log('error', err))
+            const i = new SimplePeer({ // initiator
+                initiator: true,
+                trickle: true,
+                // streams: [ stream ]
+            })
+            const ni = new SimplePeer({ // non-initiator
+                initiator: false,
+                trickle: true
+            });
+            i.on('error', err => console.log('error', err))
+            i.on('signal', data => {
+                ni.signal(data);
+            });
+            i.on('connect', () => {
+                console.log('i: connected')
 
-      p.on('signal', data => {
-        console.log('SIGNAL', JSON.stringify(data))
-        document.querySelector('#outgoing').textContent = JSON.stringify(data)
-      })
+                setInterval(() => {
+                    i.send('whatever' + Math.random());
+                }, 2000 + 1000 * Math.random());
 
-      document.querySelector('form').addEventListener('submit', ev => {
-        ev.preventDefault()
-        p.signal(JSON.parse(document.querySelector('#incoming').value))
-      })
+                // Add a stream and remove it 5 seconds later.
+                function addStreamRemoveStream() {
+                    console.log("i: Sending stream to ni.");
+                    i.addStream(stream);
+                    setTimeout(() => {
+                        console.log("i: Stop sending stream to ni.");
+                        i.removeStream(stream);
+                    }, 5000);
+                }
+                // call every 10 seconds.
+                setInterval(() => {
+                    addStreamRemoveStream();
+                }, 10000);
+                addStreamRemoveStream();
+            })
+            i.on('data', data => {
+                console.log('ni -> i: ' + data)
+            });
+            i.on('stream', (stream) => {
+                iVid.srcObject = stream;
+            });
+            /****************************************/
+            ni.on('error', err => console.log('error', err))
+            ni.on('signal', data => {
+                i.signal(data);
+            });
+            ni.on('connect', () => {
+                console.log('ni: connected')
+                setInterval(() => {
+                    ni.send('whatever' + Math.random());
+                }, 2000 + 1000 * Math.random());
 
-      p.on('connect', () => {
-        console.log('CONNECT')
-        p.send('whatever' + Math.random())
-      })
-
-      p.on('data', data => {
-        console.log('data: ' + data)
-      })
+                ni.addStream(stream);
+            })
+            ni.on('data', data => {
+                console.log('i -> ni: ' + data)
+            });
+            ni.on('stream', (stream) => {
+                console.log("ni: Got a stream.");
+                niVid.srcObject = stream;
+            });
+        })();
     </script>
-  </body>
+</body>
+
 </html>
 ```
 
-Visit `index.html#1` from one browser (the initiator) and `index.html` from another
-browser (the receiver).
-
-An "offer" will be generated by the initiator. Paste this into the receiver's form and
-hit submit. The receiver generates an "answer". Paste this into the initiator's form and
-hit submit.
-
-Now you have a direct P2P connection between two browsers!
+Visit `index.html` from your browser there are two peers in the file i (initiator) and ni (non-initiator).
+These two connecto to each other, they addStreams and keep sending each other data. Also i keeps on adding and
+removing stream to show case dynamic ability to add and remove streams.
 
 ### A simpler example
 
@@ -329,22 +327,6 @@ Add a `MediaStream` to the connection.
 
 Remove a `MediaStream` from the connection.
 
-### `peer.addTrack(track, stream)`
-
-Add a `MediaStreamTrack` to the connection. Must also pass the `MediaStream` you want to attach it to.
-
-### `peer.removeTrack(track, stream)`
-
-Remove a `MediaStreamTrack` from the connection. Must also pass the `MediaStream` that it was attached to.
-
-### `peer.replaceTrack(oldTrack, newTrack, stream)`
-
-Replace a `MediaStreamTrack` with another track. Must also pass the `MediaStream` that the old track was attached to.
-
-### `peer.addTransceiver(kind, init)`
-
-Add a `RTCRtpTransceiver` to the connection. Can be used to add transceivers before adding tracks. Automatically called as neccesary by `addTrack`.
-
 ### `peer.destroy([err])`
 
 Destroy and cleanup this peer connection.
@@ -428,10 +410,6 @@ peer.on('stream', stream => {
   video.play()
 })
 ```
-
-### `peer.on('track', (track, stream) => {})`
-
-Received a remote audio/video track. Streams may contain multiple tracks.
 
 ### `peer.on('close', () => {})`
 
@@ -597,51 +575,6 @@ server.
 
 In order to use a TURN server, you must specify the `config` option to the `Peer`
 constructor. See the API docs above.
-
-[![js-standard-style](https://cdn.rawgit.com/feross/standard/master/badge.svg)](https://github.com/feross/standard)
-
-
-## Who is using `simple-peer`?
-
-- [WebTorrent](http://webtorrent.io) - Streaming torrent client in the browser
-- [Virus Cafe](https://virus.cafe) - Make a friend in 2 minutes
-- [Instant.io](https://instant.io) - Secure, anonymous, streaming file transfer
-- [Zencastr](https://zencastr.com) - Easily record your remote podcast interviews in studio quality.
-- [Friends](https://github.com/moose-team/friends) - Peer-to-peer chat powered by the web
-- [Socket.io-p2p](https://github.com/socketio/socket.io-p2p) - Official Socket.io P2P communication library
-- [ScreenCat](https://maxogden.github.io/screencat/) - Screen sharing + remote collaboration app
-- [WebCat](https://www.npmjs.com/package/webcat) - P2P pipe across the web using Github private/public key for auth
-- [RTCCat](https://www.npmjs.com/package/rtcat) - WebRTC netcat
-- [PeerNet](https://www.npmjs.com/package/peernet) - Peer-to-peer gossip network using randomized algorithms
-- [PusherTC](http://pushertc.herokuapp.com) - Video chat with using Pusher. See [guide](http://blog.carbonfive.com/2014/10/16/webrtc-made-simple/).
-- [lxjs-chat](https://github.com/feross/lxjs-chat) - Omegle-like video chat site
-- [Whiteboard](https://github.com/feross/whiteboard) - P2P Whiteboard powered by WebRTC and WebTorrent
-- [Peer Calls](https://peercalls.com) - WebRTC group video calling. Create a room. Share the link.
-- [Netsix](https://mmorainville.github.io/netsix-gh-pages/) - Send videos to your friends using WebRTC so that they can watch them right away.
-- [Stealthy](https://www.stealthy.im) - Stealthy is a decentralized, end-to-end encrypted, p2p chat application.
-- [oorja.io](https://github.com/akshayKMR/oorja) - Effortless video-voice chat with realtime collaborative features. Extensible using react components 🙌
-- [TalktoMe](https://talktome.space) - Skype alternative for audio/video conferencing based on WebRTC, but without the loss of packets.
-- [CDNBye](https://github.com/cdnbye/hlsjs-p2p-engine) - CDNBye implements WebRTC datachannel to scale live/vod video streaming by peer-to-peer network using bittorrent-like protocol
-- [Detox](https://github.com/Detox) - Overlay network for distributed anonymous P2P communications entirely in the browser
-- [Metastream](https://github.com/samuelmaddock/metastream) - Watch streaming media with friends.
-- [firepeer](https://github.com/natzcam/firepeer) - secure signalling and authentication using firebase realtime database
-- [Genet](https://github.com/elavoie/webrtc-tree-overlay) - Fat-tree overlay to scale the number of concurrent WebRTC connections to a single source ([paper](https://arxiv.org/abs/1904.11402)).
-- [WebRTC Connection Testing](https://github.com/elavoie/webrtc-connection-testing) - Quickly test direct connectivity between all pairs of participants ([demo](https://webrtc-connection-testing.herokuapp.com/)).
-- [Firstdate.co](https://firstdate.co) - Online video dating for actually meeting people and not just messaging them
-- [TensorChat](https://github.com/EhsaanIqbal/tensorchat) - It's simple - Create. Share. Chat.
-- [On/Office](https://onoffice.app) - View your desktop in a WebVR-powered environment
-- [Cyph](https://www.cyph.com) - Cryptographically secure messaging and social networking service, providing an extreme level of privacy combined with best-in-class ease of use
-- [Ciphora](https://github.com/HR/ciphora) - A peer-to-peer end-to-end encrypted messaging chat app.
-- [Whisthub](https://www.whisthub.com) - Online card game Color Whist with the possibility to start a video chat while playing.
-- [Brie.fi/ng](https://brie.fi/ng) - Secure anonymous video chat
-- [Peer.School](https://github.com/holtwick/peer2school) - Simple virtual classroom starting from the 1st class including video chat and real time whiteboard
-- [FileFire](https://filefire.ca) - Transfer large files and folders at high speed without size limits.
-- [safeShare](https://github.com/vj-abishek/airdrop) - Transfer files easily with text and voice communication.
-- [CubeChat](https://cubechat.io) - Party in 3D 🎉
-- [Homely School](https://homelyschool.com) - A virtual schooling system
-- [AnyDrop](https://anydrop.io) - Cross-platform AirDrop alternative [with an Android app available at Google Play](https://play.google.com/store/apps/details?id=com.benjijanssens.anydrop) 
-- [Share-Anywhere](https://share-anywhere.com/) - Cross-platform file transfer
-- *Your app here! - send a PR!*
 
 ## license
 
