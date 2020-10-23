@@ -4,6 +4,10 @@ This repository is an indirect fork of the original feross/simple-peer. The only
 
 This library should be useless after react-native-webrtc adds support for addTrack and the like.
 
+#### Note for react-native-webrtc users.
+
+If you already had simple-peer installed and are going to use this one, then after installing remember to clean packager cache by restarting your metro bundler with ```react-native start --reset-cache```
+
 #### Deviations from simple-peer
 
 addTrack, removeTrack, replaceTrack, and addTransceiver have been removed. addStream and removeStream can still be used.
